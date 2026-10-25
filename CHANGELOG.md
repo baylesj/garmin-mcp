@@ -13,6 +13,10 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 - `get_fitness_metrics` also returns `cycling_ftp`, the latest cycling FTP (watts, date set, source, stale flag), so a fitness snapshot includes threshold power alongside VO2 max. A failed FTP call leaves it `null` instead of failing the tool.
 - Requires `garminconnect>=0.3.9`, the first release with `get_functional_threshold_power_range`; the lockfile moves to 0.3.20. The three new methods are on the read allowlist.
 
+### Fixed
+
+- **Training readiness recovery time** — Garmin's `recoveryTime` is in minutes, but it was reported unchanged as `recovery_time_hours`, so 73.5 h of recovery read as 4410 hours. `recovery_time_hours` is now converted (a float, rounded to 0.1 h) and the raw value is kept as `recovery_time_minutes`.
+
 ## [0.5.0] — 2026-08-17
 
 ### Added

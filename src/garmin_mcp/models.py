@@ -220,7 +220,13 @@ class TrainingReadiness(_StrictBase):
     feedback_long: str | None = None
     sleep_score: int | None = None
     sleep_history_score: int | None = None
-    recovery_time_hours: int | None = None
+    recovery_time_minutes: int | None = Field(
+        default=None,
+        description="Time until fully recovered, in minutes as Garmin reports it (max 5760 = 96 h).",
+    )
+    recovery_time_hours: float | None = Field(
+        default=None, description="recovery_time_minutes in hours, rounded to 0.1."
+    )
     acute_load: float | None = None
     hrv_status: str | None = None
     stress_history: int | None = None
