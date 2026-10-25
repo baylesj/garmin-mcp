@@ -167,6 +167,7 @@ async def test_fitness_metrics_combines_payloads() -> None:
             {
                 "get_max_metrics": MAX_METRICS_PAYLOAD,
                 "get_race_predictions": RACE_PREDICTIONS_PAYLOAD,
+                "get_cycling_ftp": {},
             }
         )
     )
@@ -177,6 +178,7 @@ async def test_fitness_metrics_combines_payloads() -> None:
     assert result.fitness_age == 32.0
     distances = {p.distance for p in result.race_predictions}
     assert {"5k", "10k", "halfMarathon", "marathon"} == distances
+    assert result.cycling_ftp is None
 
 
 @pytest.mark.asyncio

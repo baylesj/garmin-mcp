@@ -356,3 +356,37 @@ def test_ftp_methods_are_read_only() -> None:
     ):
         assert name in _READ_METHODS
         assert name not in _WRITE_METHODS
+
+
+@pytest.mark.asyncio
+async def test_fitness_metrics_includes_current_ftp() -> None:
+    server_module.set_garmin_client_for_testing(
+        FakeGarminClient(
+            {
+                "get_max_metrics": None,
+                "get_race_predictions": None,
+                "get_cycling_ftp": CYCLING_FTP_PAYLOAD,
+            }
+        )
+    )
+    result = await server_module.get_fitness_metrics(date="2026-10-24")
+    assert result.cycling_ftp is not None
+    assert result.cycling_ftp.ftp_watts == 217
+    assert result.cycling_ftp.date_set == "2026-10-14"
+    # An FTP on file counts as a fitness metric, so there is no "nothing recorded" note.
+    assert result.note is None
+
+
+@pytest.mark.asyncio
+async def test_fitness_metrics_without_ftp() -> None:
+    def fail() -> Any:
+        raise GarminClientError("Garmin call failed")
+
+    server_module.set_garmin_client_for_testing(
+        FakeGarminClient(
+            {"get_max_metrics": None, "get_race_predictions": None, "get_cycling_ftp": fail}
+        )
+    )
+    result = await server_module.get_fitness_metrics(date="2026-10-24")
+    assert result.cycling_ftp is None
+    assert result.note is not None

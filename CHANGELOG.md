@@ -10,6 +10,7 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ### Changed
 
+- `get_fitness_metrics` also returns `cycling_ftp`, the latest cycling FTP (watts, date set, source, stale flag), so a fitness snapshot includes threshold power alongside VO2 max. A failed FTP call leaves it `null` instead of failing the tool.
 - Requires `garminconnect>=0.3.9`, the first release with `get_functional_threshold_power_range`; the lockfile moves to 0.3.20. The three new methods are on the read allowlist.
 
 ## [0.5.0] — 2026-08-17

@@ -233,12 +233,34 @@ class RacePrediction(_StrictBase):
     seconds: int | None = None
 
 
+class CurrentFTP(_StrictBase):
+    """The most recent FTP Garmin has on file for a sport."""
+
+    ftp_watts: float | None = Field(default=None, description="Functional threshold power, W.")
+    date_set: str | None = Field(
+        default=None, description="Date this FTP was set or detected, YYYY-MM-DD."
+    )
+    source: str | None = Field(
+        default=None,
+        description="Garmin's biometricSourceType for the value, e.g. CHANGE_LOG.",
+    )
+    is_stale: bool | None = Field(
+        default=None, description="Garmin's flag for an FTP it considers out of date."
+    )
+
+
 class FitnessMetrics(_StrictBase):
     date: str
     vo2_max_running: float | None = Field(default=None, description="ml/kg/min for running.")
     vo2_max_cycling: float | None = Field(default=None, description="ml/kg/min for cycling.")
     fitness_age: float | None = None
     race_predictions: list[RacePrediction] = Field(default_factory=list)
+    cycling_ftp: CurrentFTP | None = Field(
+        default=None,
+        description=(
+            "Latest cycling FTP on file (not as of `date`). get_ftp has its history and power zones."
+        ),
+    )
     note: str | None = None
 
 
@@ -428,22 +450,6 @@ class ActivityWeather(_StrictBase):
     station_name: str | None = None
     observed_at: str | None = None
     note: str | None = None
-
-
-class CurrentFTP(_StrictBase):
-    """The most recent FTP Garmin has on file for a sport."""
-
-    ftp_watts: float | None = Field(default=None, description="Functional threshold power, W.")
-    date_set: str | None = Field(
-        default=None, description="Date this FTP was set or detected, YYYY-MM-DD."
-    )
-    source: str | None = Field(
-        default=None,
-        description="Garmin's biometricSourceType for the value, e.g. CHANGE_LOG.",
-    )
-    is_stale: bool | None = Field(
-        default=None, description="Garmin's flag for an FTP it considers out of date."
-    )
 
 
 class FTPHistoryEntry(_StrictBase):

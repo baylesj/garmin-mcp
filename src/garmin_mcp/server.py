@@ -609,10 +609,11 @@ async def get_daily_briefing(date: str | None = None) -> DailyBriefing:
 
 @mcp.tool()
 async def get_fitness_metrics(date: str | None = None) -> FitnessMetrics:
-    """VO2 max (running and cycling), fitness age, and predicted race times.
+    """VO2 max (running and cycling), fitness age, predicted race times, and FTP.
 
     Combines Garmin's "max metrics" tile (VO2 max, fitness age) with current
-    race-time predictions for 5K, 10K, half marathon, and marathon.
+    race-time predictions for 5K, 10K, half marathon, and marathon, and the
+    latest cycling FTP (use get_ftp for FTP history and power zones).
 
     Args:
         date: Calendar date for the VO2 max snapshot in YYYY-MM-DD format.
@@ -647,7 +648,13 @@ async def get_fitness_metrics(date: str | None = None) -> FitnessMetrics:
         except GarminClientError as exc:
             log.warning("fitness.race_predictions.failed", error=str(exc)[:200])
             race = None
-        return _parse_fitness_metrics(max_date, max_metrics, race)
+        ftp: CurrentFTP | None
+        try:
+            ftp = await _fetch_current_ftp()
+        except GarminClientError as exc:
+            log.warning("fitness.ftp.failed", error=str(exc)[:200])
+            ftp = None
+        return _parse_fitness_metrics(max_date, max_metrics, race, ftp)
 
     result: FitnessMetrics = await _cache.get_or_compute(cache_key, 86400, fetch)
     return result
@@ -862,6 +869,18 @@ _GARMIN_RANGE_MAX_DAYS = 366
 _FTP_AGGREGATIONS = ("daily", "weekly", "monthly", "yearly")
 
 
+async def _fetch_current_ftp() -> CurrentFTP:
+    """Latest cycling FTP, cached for an hour; shared by get_ftp and get_fitness_metrics."""
+
+    async def fetch() -> CurrentFTP:
+        raw = await _get_garmin().call("get_cycling_ftp")
+        return _parse_current_ftp(raw)
+
+    key = TTLCache.make_key("get_ftp.current", None)
+    result: CurrentFTP = await _cache.get_or_compute(key, 3600, fetch)
+    return result
+
+
 @mcp.tool()
 async def get_ftp(
     sport: str = "CYCLING",
@@ -897,15 +916,6 @@ async def get_ftp(
     end = Date.today()
     start = end - timedelta(days=days - 1)
 
-    async def fetch_current() -> CurrentFTP:
-        async def fetch() -> CurrentFTP:
-            raw = await _get_garmin().call("get_cycling_ftp")
-            return _parse_current_ftp(raw)
-
-        key = TTLCache.make_key("get_ftp.current", None)
-        result: CurrentFTP = await _cache.get_or_compute(key, 3600, fetch)
-        return result
-
     async def fetch_history() -> FTPHistory:
         async def fetch() -> FTPHistory:
             client = _get_garmin()
@@ -940,7 +950,7 @@ async def get_ftp(
     sections: dict[str, Any] = {"history": fetch_history(), "power_zones": fetch_zones()}
     note: str | None = None
     if sport_norm == "CYCLING":
-        sections["current"] = fetch_current()
+        sections["current"] = _fetch_current_ftp()
     else:
         note = (
             f"The latest-FTP call is cycling-only, so current is null for {sport_norm}; "
@@ -1911,6 +1921,7 @@ def _parse_fitness_metrics(
     date: str,
     max_metrics: Any,
     race: Any,
+    ftp: CurrentFTP | None = None,
 ) -> FitnessMetrics:
     vo2_run: float | None = None
     vo2_cycle: float | None = None
@@ -1950,7 +1961,8 @@ def _parse_fitness_metrics(
                 predictions.append(RacePrediction(distance=label, seconds=value))
 
     note: str | None = None
-    if max_payload is None and not predictions:
+    cycling_ftp = ftp if ftp is not None and ftp.ftp_watts is not None else None
+    if max_payload is None and not predictions and cycling_ftp is None:
         note = "No fitness metrics recorded yet. Wear your watch for runs/rides."
 
     return FitnessMetrics(
@@ -1959,6 +1971,7 @@ def _parse_fitness_metrics(
         vo2_max_cycling=vo2_cycle,
         fitness_age=fitness_age,
         race_predictions=predictions,
+        cycling_ftp=cycling_ftp,
         note=note,
     )
 
