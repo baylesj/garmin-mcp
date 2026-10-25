@@ -33,7 +33,7 @@ READINESS_PAYLOAD: list[dict[str, Any]] = [
         "feedbackLong": "You're ready for a hard session.",
         "sleepScore": 82,
         "sleepHistoryFactorPercent": 70,
-        "recoveryTime": 12,
+        "recoveryTime": 4410,
         "acuteLoad": 320.0,
         "hrvStatus": "BALANCED",
         "stressHistoryFactorPercent": 65,
@@ -147,6 +147,8 @@ async def test_training_readiness_parses() -> None:
     assert result.score == 78
     assert result.level == "HIGH"
     assert result.sleep_score == 82
+    assert result.recovery_time_minutes == 4410
+    assert result.recovery_time_hours == 73.5
     assert result.hrv_status == "BALANCED"
     assert any(f.name == "Sleep" for f in result.factors)
     assert result.note is None

@@ -4,6 +4,10 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ## [Unreleased]
 
+### Fixed
+
+- **Training readiness recovery time** — Garmin's `recoveryTime` is in minutes, but it was reported unchanged as `recovery_time_hours`, so 73.5 h of recovery read as 4410 hours. `recovery_time_hours` is now converted (a float, rounded to 0.1 h) and the raw value is kept as `recovery_time_minutes`.
+
 ## [0.5.0] — 2026-08-17
 
 ### Added

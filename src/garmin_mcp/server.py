@@ -1763,6 +1763,10 @@ def _parse_training_readiness(raw: Any, date: str) -> TrainingReadiness:
     if payload is None:
         return TrainingReadiness(date=date, note="No training readiness data for this date.")
 
+    # recoveryTime is in minutes (it tops out at 5760, Garmin's 96 h maximum), not hours.
+    recovery_minutes = _opt_int(payload.get("recoveryTime"))
+    recovery_hours = round(recovery_minutes / 60, 1) if recovery_minutes is not None else None
+
     factors: list[TrainingReadinessFactor] = []
     for label, key in (
         ("Sleep", "sleepScoreFactorFeedback"),
@@ -1784,7 +1788,8 @@ def _parse_training_readiness(raw: Any, date: str) -> TrainingReadiness:
         feedback_long=_opt_str(payload.get("feedbackLong")),
         sleep_score=_opt_int(payload.get("sleepScore")),
         sleep_history_score=_opt_int(payload.get("sleepHistoryFactorPercent")),
-        recovery_time_hours=_opt_int(payload.get("recoveryTime")),
+        recovery_time_minutes=recovery_minutes,
+        recovery_time_hours=recovery_hours,
         acute_load=_opt_float(payload.get("acuteLoad")),
         # The readiness payload exposes the HRV contribution as a factor feedback
         # label (e.g. POOR/GOOD), not an "hrvStatus" key. Map it so the field
