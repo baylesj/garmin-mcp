@@ -4,6 +4,14 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ## [Unreleased]
 
+### Added
+
+- **`get_ftp`** — functional threshold power for a sport (default `CYCLING`): the current FTP with the date it was set, its source (`biometricSourceType`), and Garmin's stale flag; FTP history over the last `days` days (default 365, up to 1095) at daily, weekly, monthly, or yearly aggregation, fetched in windows of at most 366 days because Garmin rejects longer ranges; and the sport's power zones with floor, ceiling, and percent of FTP. Each section degrades to `null` (and is named in `sections_unavailable`) instead of failing the call.
+
+### Changed
+
+- Requires `garminconnect>=0.3.9`, the first release with `get_functional_threshold_power_range`; the lockfile moves to 0.3.20. The three new methods are on the read allowlist.
+
 ## [0.5.0] — 2026-08-17
 
 ### Added

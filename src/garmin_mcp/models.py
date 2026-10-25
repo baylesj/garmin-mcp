@@ -430,6 +430,78 @@ class ActivityWeather(_StrictBase):
     note: str | None = None
 
 
+class CurrentFTP(_StrictBase):
+    """The most recent FTP Garmin has on file for a sport."""
+
+    ftp_watts: float | None = Field(default=None, description="Functional threshold power, W.")
+    date_set: str | None = Field(
+        default=None, description="Date this FTP was set or detected, YYYY-MM-DD."
+    )
+    source: str | None = Field(
+        default=None,
+        description="Garmin's biometricSourceType for the value, e.g. CHANGE_LOG.",
+    )
+    is_stale: bool | None = Field(
+        default=None, description="Garmin's flag for an FTP it considers out of date."
+    )
+
+
+class FTPHistoryEntry(_StrictBase):
+    """FTP for one aggregation period (a day, week, month, or year)."""
+
+    period_start: str = Field(description="First day of the period, YYYY-MM-DD.")
+    period_end: str | None = Field(default=None, description="Last day of the period.")
+    ftp_watts: float | None = Field(
+        default=None, description="Latest FTP recorded within the period, W."
+    )
+    updated_date: str | None = Field(
+        default=None, description="Date the FTP reported for this period was last updated."
+    )
+
+
+class FTPHistory(_StrictBase):
+    start_date: str
+    end_date: str
+    aggregation: str = Field(description="daily, weekly, monthly, or yearly.")
+    entries: list[FTPHistoryEntry] = Field(
+        default_factory=list, description="Periods with an FTP reading, oldest first."
+    )
+
+
+class PowerZone(_StrictBase):
+    zone: int
+    floor_watts: float
+    ceiling_watts: float | None = Field(
+        default=None, description="The next zone's floor; null for the top zone."
+    )
+    floor_pct_of_ftp: float | None = Field(
+        default=None, description="Zone floor as a percentage of the zones' FTP."
+    )
+
+
+class PowerZones(_StrictBase):
+    ftp_watts: float | None = Field(default=None, description="FTP the zones are computed from, W.")
+    zones: list[PowerZone] = Field(default_factory=list)
+
+
+class FTPSummary(_StrictBase):
+    """Functional threshold power for a sport: current value, history, and zones.
+
+    Each section is ``None`` when it could not be fetched (its name then
+    appears in ``sections_unavailable``).
+    """
+
+    sport: str = Field(description="Garmin sport key, e.g. CYCLING or RUNNING.")
+    current: CurrentFTP | None = None
+    history: FTPHistory | None = None
+    power_zones: PowerZones | None = None
+    sections_unavailable: list[str] = Field(
+        default_factory=list,
+        description="Names of sections that could not be fetched.",
+    )
+    note: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Strength workout creation (write) — inputs
 # ---------------------------------------------------------------------------

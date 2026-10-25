@@ -20,6 +20,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 from datetime import (
     date as Date,  # noqa: N812 (capitalised to avoid shadowing the `date` parameter on tools)
@@ -61,16 +62,22 @@ from garmin_mcp.models import (
     BodyBatterySummary,
     BodyCompositionDay,
     BodyCompositionTrend,
+    CurrentFTP,
     DailyBriefing,
     EnduranceContributor,
     EnduranceScore,
     FitnessMetrics,
+    FTPHistory,
+    FTPHistoryEntry,
+    FTPSummary,
     HillScore,
     HRVDayReading,
     HRVStatus,
     HRZone,
     PersonalRecord,
     PersonalRecords,
+    PowerZone,
+    PowerZones,
     RacePrediction,
     ResolvedExerciseInfo,
     RespirationSummary,
@@ -847,6 +854,111 @@ async def get_activity_weather(activity_id: str) -> ActivityWeather:
 
     result: ActivityWeather = await _cache.get_or_compute(cache_key, 86400, fetch)
     return result
+
+
+# Garmin's biometric-stats range endpoints reject spans over 366 days (HTTP 400),
+# so longer FTP histories are fetched in windows of at most this many days.
+_GARMIN_RANGE_MAX_DAYS = 366
+_FTP_AGGREGATIONS = ("daily", "weekly", "monthly", "yearly")
+
+
+@mcp.tool()
+async def get_ftp(
+    sport: str = "CYCLING",
+    days: int = 365,
+    aggregation: str | None = None,
+) -> FTPSummary:
+    """Functional threshold power (FTP): current value, history, and power zones.
+
+    Returns the latest FTP with the date it was set and its source (Garmin's
+    ``biometricSourceType``), FTP history over the last ``days`` days, and the
+    sport's power zones in watts and as a percentage of FTP. Each section is
+    fetched independently; one that fails comes back ``null`` and is named in
+    ``sections_unavailable`` rather than failing the whole call.
+
+    The latest-FTP call (``get_cycling_ftp``) covers cycling only, so ``current``
+    is null for other sports; the zones' ``ftp_watts`` and the newest history
+    entry still show the current value.
+
+    Args:
+        sport: Garmin sport key such as CYCLING (default) or RUNNING.
+        days: History window ending today. Capped at 1095 (three years).
+        aggregation: One of "daily", "weekly", "monthly", or "yearly". Defaults
+            to daily for windows up to 90 days and monthly beyond. Only periods
+            with an FTP reading are returned.
+    """
+    sport_norm = sport.strip().upper()
+    if not re.fullmatch(r"[A-Z_]+", sport_norm):
+        raise ValueError("sport must be a Garmin sport key such as 'CYCLING' or 'RUNNING'.")
+    days = max(1, min(1095, days))
+    agg = (aggregation or "").strip().lower() or ("daily" if days <= 90 else "monthly")
+    if agg not in _FTP_AGGREGATIONS:
+        raise ValueError("aggregation must be one of: 'daily', 'weekly', 'monthly', 'yearly'")
+    end = Date.today()
+    start = end - timedelta(days=days - 1)
+
+    async def fetch_current() -> CurrentFTP:
+        async def fetch() -> CurrentFTP:
+            raw = await _get_garmin().call("get_cycling_ftp")
+            return _parse_current_ftp(raw)
+
+        key = TTLCache.make_key("get_ftp.current", None)
+        result: CurrentFTP = await _cache.get_or_compute(key, 3600, fetch)
+        return result
+
+    async def fetch_history() -> FTPHistory:
+        async def fetch() -> FTPHistory:
+            client = _get_garmin()
+            chunks = [
+                await client.call(
+                    "get_functional_threshold_power_range",
+                    window_start,
+                    window_end,
+                    sport=sport_norm,
+                    aggregation=agg,
+                )
+                for window_start, window_end in _date_windows(start, end, _GARMIN_RANGE_MAX_DAYS)
+            ]
+            return _parse_ftp_history(chunks, start.isoformat(), end.isoformat(), agg)
+
+        key = TTLCache.make_key(
+            "get_ftp.history",
+            {"sport": sport_norm, "start": start.isoformat(), "end": end.isoformat(), "agg": agg},
+        )
+        result: FTPHistory = await _cache.get_or_compute(key, 3600, fetch)
+        return result
+
+    async def fetch_zones() -> PowerZones:
+        async def fetch() -> PowerZones:
+            raw = await _get_garmin().call("get_power_zones_for_sport", sport_norm)
+            return _parse_power_zones(raw)
+
+        key = TTLCache.make_key("get_ftp.zones", {"sport": sport_norm})
+        result: PowerZones = await _cache.get_or_compute(key, 3600, fetch)
+        return result
+
+    sections: dict[str, Any] = {"history": fetch_history(), "power_zones": fetch_zones()}
+    note: str | None = None
+    if sport_norm == "CYCLING":
+        sections["current"] = fetch_current()
+    else:
+        note = (
+            f"The latest-FTP call is cycling-only, so current is null for {sport_norm}; "
+            "see power_zones.ftp_watts and the newest history entry."
+        )
+    results = await asyncio.gather(*sections.values(), return_exceptions=True)
+
+    fields: dict[str, Any] = {"sport": sport_norm, "note": note}
+    unavailable: list[str] = []
+    for name, result in zip(sections, results, strict=True):
+        if isinstance(result, BaseException):
+            log.warning("ftp.section.failed", section=name, error=str(result)[:200])
+            fields[name] = None
+            unavailable.append(name)
+        else:
+            fields[name] = result
+    fields["sections_unavailable"] = unavailable
+    return FTPSummary(**fields)
 
 
 # ---------------------------------------------------------------------------
@@ -2180,6 +2292,90 @@ def _parse_activity_weather(activity_id: str, raw: Any) -> ActivityWeather:
         station_name=_opt_str(station.get("name")) if isinstance(station, dict) else None,
         observed_at=_opt_str(raw.get("issueDate")),
     )
+
+
+def _date_windows(start: Date, end: Date, max_days: int) -> list[tuple[str, str]]:
+    """Split ``start``..``end`` (inclusive) into consecutive windows of at most
+    ``max_days`` days each, as (start, end) ISO date pairs."""
+    windows: list[tuple[str, str]] = []
+    cursor = start
+    while cursor <= end:
+        window_end = min(end, cursor + timedelta(days=max_days - 1))
+        windows.append((cursor.isoformat(), window_end.isoformat()))
+        cursor = window_end + timedelta(days=1)
+    return windows
+
+
+def _parse_current_ftp(raw: Any) -> CurrentFTP:
+    payload = _first_dict(raw)
+    if payload is None:
+        return CurrentFTP()
+    calendar_date = _opt_str(payload.get("calendarDate"))
+    is_stale = payload.get("isStale")
+    return CurrentFTP(
+        ftp_watts=_opt_float(payload.get("functionalThresholdPower")),
+        # calendarDate is a timestamp such as "2026-10-14T00:45:35.0".
+        date_set=calendar_date[:10] if calendar_date else None,
+        source=_opt_str(payload.get("biometricSourceType")),
+        is_stale=is_stale if isinstance(is_stale, bool) else None,
+    )
+
+
+def _parse_ftp_history(chunks: list[Any], start: str, end: str, aggregation: str) -> FTPHistory:
+    by_period: dict[str, FTPHistoryEntry] = {}
+    for raw in chunks:
+        rows = raw if isinstance(raw, list) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            period_start = _opt_str(row.get("from"))
+            ftp = _opt_float(row.get("value"))
+            if period_start is None or ftp is None:
+                continue
+            entry = FTPHistoryEntry(
+                period_start=period_start,
+                period_end=_opt_str(row.get("until")),
+                ftp_watts=ftp,
+                updated_date=_opt_str(row.get("updatedDate")),
+            )
+            # A week/month cut by a window boundary is reported by both windows;
+            # keep the more recently updated reading (ties go to the later window).
+            existing = by_period.get(period_start)
+            if existing is None or (entry.updated_date or "") >= (existing.updated_date or ""):
+                by_period[period_start] = entry
+    return FTPHistory(
+        start_date=start,
+        end_date=end,
+        aggregation=aggregation,
+        entries=sorted(by_period.values(), key=lambda e: e.period_start),
+    )
+
+
+def _parse_power_zones(raw: Any) -> PowerZones:
+    payload = _first_dict(raw)
+    if payload is None:
+        return PowerZones()
+    ftp = _opt_float(payload.get("functionalThresholdPower"))
+    floors: list[float] = []
+    zone = 1
+    while f"zone{zone}Floor" in payload:
+        floor = _opt_float(payload.get(f"zone{zone}Floor"))
+        # Zone 1 starts at 0 W; a zero floor above it means the zone is unused
+        # (running zones, for example, stop at zone 5).
+        if floor is None or (zone > 1 and floor <= 0):
+            break
+        floors.append(floor)
+        zone += 1
+    zones = [
+        PowerZone(
+            zone=i + 1,
+            floor_watts=floor,
+            ceiling_watts=floors[i + 1] if i + 1 < len(floors) else None,
+            floor_pct_of_ftp=round(floor / ftp * 100, 1) if ftp else None,
+        )
+        for i, floor in enumerate(floors)
+    ]
+    return PowerZones(ftp_watts=ftp, zones=zones)
 
 
 # ---------------------------------------------------------------------------

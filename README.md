@@ -41,6 +41,7 @@ Single-user, and read-only by default — with one **opt-in** write path for cre
 | `get_endurance_score`      | Garmin endurance score with its per-activity-type contributors.              |
 | `get_hill_score`           | Garmin hill score (climbing strength + endurance) for a date.                |
 | `get_activity_weather`     | Weather recorded during an activity (temp, humidity, wind).                  |
+| `get_ftp`                  | Current FTP (date set, source), FTP history, and power zones for a sport.    |
 
 Every response is a Pydantic model serialised to JSON, with `null` for fields Garmin did not record.
 
@@ -155,6 +156,7 @@ A few specific cases worth knowing about:
 - **`get_training_load.current_status = "NO_STATUS_2"`** and **`get_hrv_status.status = "NONE"`** mean Garmin doesn't have enough recent activity history to compute the metric. They fill in naturally after ~7 consecutive days of sustained activity or watch wear.
 - **VO2 max only updates after qualifying activities** (runs, rides). `get_fitness_metrics` walks back up to 7 days to surface your most recent reading rather than returning null on a rest day.
 - **`get_stress` zone-minute breakdown** (`rest_minutes`, `low_minutes`, etc.) can come back null on partial-data days even though `avg_stress` and the timeline are populated.
+- **`get_ftp.current` is cycling-only.** The library's latest-FTP call (`get_cycling_ftp`) only covers cycling, so for `RUNNING` and other sports `current` is null; `power_zones.ftp_watts` and the newest `history` entry carry the value instead.
 - **HRV, training readiness, endurance score, hill score, and fitness age** all require a recent compatible watch (Fenix 6+ / Forerunner 245+ / similar). Older watches simply won't report them.
 
 If a tool seems to return less than you'd expect, check the same metric in the Garmin Connect app or on connect.garmin.com for the same date. If Garmin shows it there and we return null, that's a parser bug — file an issue with the date and the field name and we can usually map it in a follow-up release.

@@ -76,6 +76,9 @@ _READ_METHODS: frozenset[str] = frozenset(
         "get_endurance_score",
         "get_hill_score",
         "get_activity_weather",
+        "get_cycling_ftp",
+        "get_functional_threshold_power_range",
+        "get_power_zones_for_sport",
     }
 )
 # Deliberately minimal: create, delete, and calendar schedule/unschedule of
