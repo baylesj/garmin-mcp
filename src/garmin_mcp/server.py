@@ -26,6 +26,7 @@ from datetime import (
     date as Date,  # noqa: N812 (capitalised to avoid shadowing the `date` parameter on tools)
 )
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -45,7 +46,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from garmin_mcp.auth import InvalidLoginError, SimpleOAuthProvider
-from garmin_mcp.cache import TTLCache
+from garmin_mcp.cache import NightStore, TTLCache
 from garmin_mcp.exercise_resolver import (
     category_for_exercise,
     resolve_exercise,
@@ -72,6 +73,8 @@ from garmin_mcp.models import (
     FTPSummary,
     HillScore,
     HRVDayReading,
+    HRVHistory,
+    HRVNight,
     HRVStatus,
     HRZone,
     PersonalRecord,
@@ -225,6 +228,18 @@ else:
 _cache = TTLCache()
 _garmin: GarminClient | None = None
 
+# Past nights' HRV summaries never change once Garmin has finished with them, so they're kept on
+# disk (next to the session tokens unless GARMIN_CACHE_DIR says otherwise) and survive restarts.
+CACHE_DIR = os.getenv("GARMIN_CACHE_DIR") or str(Path(GARMIN_TOKEN_DIR).parent / "cache")
+_hrv_store = NightStore(Path(CACHE_DIR) / "hrv_nights.json")
+
+
+# Range endpoints (HRV, resting HR) are asked in windows of this many days: one 90-day request
+# was verified to return every night (2026-11-13).
+RANGE_WINDOW_DAYS = 90
+HRV_HISTORY_MAX_DAYS = 366
+RHR_MAX_DAYS = 366
+
 
 def _get_garmin() -> GarminClient:
     global _garmin
@@ -246,6 +261,12 @@ def set_garmin_client_for_testing(client: GarminClient | None) -> None:
 
 def get_cache_for_testing() -> TTLCache:
     return _cache
+
+
+def set_hrv_store_for_testing(store: NightStore) -> None:
+    """Test hook: point the on-disk HRV night cache somewhere disposable."""
+    global _hrv_store
+    _hrv_store = store
 
 
 # ---------------------------------------------------------------------------
@@ -403,30 +424,60 @@ async def get_training_load(days: int = 7) -> TrainingLoadSummary:
 
 
 @mcp.tool()
-async def get_hrv_status() -> HRVStatus:
-    """Current HRV status, baseline range, and the last 7 nights of readings."""
-    end = Date.today()
+async def get_hrv_status(date: str | None = None) -> HRVStatus:
+    """Current HRV status, baseline range, and the last 7 nights of readings.
+
+    The summary fields describe the newest night in the window that has HRV data (named in
+    ``date``), so they stay filled in before the latest night has synced. For more than a week,
+    use get_hrv_history.
+
+    Args:
+        date: Last night of the 7-night window, YYYY-MM-DD. Defaults to today.
+    """
+    end = Date.fromisoformat(_normalise_date(date, _today_iso()))
     cache_key = TTLCache.make_key("get_hrv_status", {"end": end.isoformat()})
 
     async def fetch() -> HRVStatus:
-        client = _get_garmin()
-        # Newest first; the first day with data drives the headline status.
-        nights = [(end - timedelta(days=i)).isoformat() for i in range(7)]
-        readings: list[HRVDayReading] = []
-        headline: dict[str, Any] | None = None
-        for d in nights:
-            try:
-                raw = await client.call("get_hrv_data", d)
-            except GarminClientError as exc:
-                log.warning("hrv.day.failed", date=d, error=str(exc)[:200])
-                raw = None
-            readings.append(_parse_hrv_day(d, raw))
-            if headline is None and raw is not None:
-                headline = raw
-        readings.reverse()  # oldest first for the trend
-        return _build_hrv_status(headline, readings)
+        nights = await _hrv_nights(end - timedelta(days=6), end)
+        return _build_hrv_status(nights)
 
     result: HRVStatus = await _cache.get_or_compute(cache_key, 3600, fetch)
+    return result
+
+
+@mcp.tool()
+async def get_hrv_history(start_date: str, end_date: str | None = None) -> HRVHistory:
+    """Garmin's nightly HRV summary for every night from start_date to end_date.
+
+    One row per night (oldest first): last night's average and 5-minute high, the 7-night
+    average, the status (BALANCED, UNBALANCED, LOW, POOR) and the balanced baseline range. Nights
+    without a reading have nulls. Up to 366 nights per call; past nights are cached on disk, so
+    repeat calls are fast.
+
+    Args:
+        start_date: First night, YYYY-MM-DD.
+        end_date: Last night, YYYY-MM-DD. Defaults to today.
+    """
+    start = Date.fromisoformat(_normalise_date(start_date, _today_iso()))
+    end = Date.fromisoformat(_normalise_date(end_date, _today_iso()))
+    if end < start:
+        raise ValueError("end_date must be on or after start_date.")
+    if (end - start).days + 1 > HRV_HISTORY_MAX_DAYS:
+        raise ValueError(f"At most {HRV_HISTORY_MAX_DAYS} nights per call; split the range.")
+    cache_key = TTLCache.make_key(
+        "get_hrv_history", {"start": start.isoformat(), "end": end.isoformat()}
+    )
+
+    async def fetch() -> HRVHistory:
+        nights = await _hrv_nights(start, end)
+        return HRVHistory(
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            nights=nights,
+            nights_with_data=sum(1 for n in nights if _hrv_night_has_data(n)),
+        )
+
+    result: HRVHistory = await _cache.get_or_compute(cache_key, 1800, fetch)
     return result
 
 
@@ -473,24 +524,34 @@ async def get_resting_heart_rate(days: int = 7) -> RestingHeartRateTrend:
     """Resting heart rate trend over the last ``days`` days.
 
     Args:
-        days: How many recent days to include. Capped at 28.
+        days: How many recent days to include, ending today. Capped at 366.
     """
-    days = max(1, min(28, days))
+    days = max(1, min(RHR_MAX_DAYS, days))
     end = Date.today()
     cache_key = TTLCache.make_key("get_resting_heart_rate", {"days": days, "end": end.isoformat()})
 
     async def fetch() -> RestingHeartRateTrend:
         client = _get_garmin()
-        rows: list[RHRDay] = []
-        dates = [(end - timedelta(days=i)).isoformat() for i in range(days)]
-        dates.reverse()
-        for d in dates:
+        start = end - timedelta(days=days - 1)
+        by_date: dict[str, int | None] = {}
+        # Garmin's wellness endpoint returns a range in one request; ask in windows so no single
+        # call is huge, and fall back to one call per day if a range call fails.
+        for w_start, w_end in _date_windows(start, end, RANGE_WINDOW_DAYS):
             try:
-                raw = await client.call("get_rhr_day", d)
+                raw = await client.call("get_rhr_daily", w_start, w_end)
+                for row in raw or []:
+                    if isinstance(row, dict) and row.get("calendarDate"):
+                        by_date[str(row["calendarDate"])] = _opt_int(row.get("value"))
             except GarminClientError as exc:
-                log.warning("rhr.day.failed", date=d, error=str(exc)[:200])
-                raw = None
-            rows.append(_parse_rhr_day(d, raw))
+                log.warning("rhr.range.failed", start=w_start, end=w_end, error=str(exc)[:200])
+                for d in _iso_days(Date.fromisoformat(w_start), Date.fromisoformat(w_end)):
+                    try:
+                        day_raw = await client.call("get_rhr_day", d)
+                    except GarminClientError as day_exc:
+                        log.warning("rhr.day.failed", date=d, error=str(day_exc)[:200])
+                        day_raw = None
+                    by_date[d] = _parse_rhr_day(d, day_raw).rhr_bpm
+        rows = [RHRDay(date=d, rhr_bpm=by_date.get(d)) for d in _iso_days(start, end)]
         valid = [r.rhr_bpm for r in rows if r.rhr_bpm is not None]
         avg = sum(valid) / len(valid) if valid else None
         return RestingHeartRateTrend(days=rows, avg_rhr_bpm=avg)
@@ -1509,8 +1570,11 @@ def _parse_sleep(raw: Any, date: str) -> SleepSummary:
         sleep_score = _opt_int(overall.get("value"))
         sleep_quality = _opt_str(overall.get("qualifierKey"))
 
-    hrv = raw.get("hrvSummary") or {}
-    avg_hrv = _opt_float(hrv.get("lastNightAvg")) if isinstance(hrv, dict) else None
+    # Overnight HRV sits beside dailySleepDTO, not inside it (avgOvernightHrv / hrvStatus).
+    avg_hrv = _opt_float(raw.get("avgOvernightHrv"))
+    if avg_hrv is None:
+        hrv = raw.get("hrvSummary") or {}
+        avg_hrv = _opt_float(hrv.get("lastNightAvg")) if isinstance(hrv, dict) else None
 
     summary = SleepSummary(
         date=daily.get("calendarDate") or date,
@@ -1522,6 +1586,7 @@ def _parse_sleep(raw: Any, date: str) -> SleepSummary:
         rem_sleep_seconds=_opt_int(daily.get("remSleepSeconds")),
         awake_seconds=_opt_int(daily.get("awakeSleepSeconds")),
         avg_overnight_hrv_ms=avg_hrv,
+        overnight_hrv_status=_opt_str(raw.get("hrvStatus")),
         avg_respiration=_opt_float(daily.get("averageRespirationValue")),
         avg_spo2=_opt_float(daily.get("averageSpO2Value")),
     )
@@ -1712,41 +1777,113 @@ def _build_training_load_summary(
     )
 
 
-def _parse_hrv_day(date: str, raw: Any) -> HRVDayReading:
-    if not isinstance(raw, dict):
-        return HRVDayReading(date=date)
-    summary = raw.get("hrvSummary") or {}
+def _parse_hrv_night(summary: Any, date: str) -> HRVNight:
+    """One night from Garmin's hrvSummary (the per-night and the range endpoint share the shape)."""
     if not isinstance(summary, dict):
-        return HRVDayReading(date=date)
-    return HRVDayReading(
+        return HRVNight(date=date)
+    baseline = summary.get("baseline")
+    baseline = baseline if isinstance(baseline, dict) else {}
+    return HRVNight(
         date=_opt_str(summary.get("calendarDate")) or date,
         last_night_avg_ms=_opt_float(summary.get("lastNightAvg")),
         last_night_5min_high_ms=_opt_float(summary.get("lastNight5MinHigh")),
+        weekly_avg_ms=_opt_float(summary.get("weeklyAvg")),
         status=_opt_str(summary.get("status")),
+        baseline_low_ms=_opt_float(baseline.get("balancedLow")),
+        baseline_high_ms=_opt_float(baseline.get("balancedUpper")),
+        low_threshold_ms=_opt_float(baseline.get("lowUpper")),
+        feedback=_opt_str(summary.get("feedbackPhrase")),
     )
 
 
-def _build_hrv_status(
-    headline: dict[str, Any] | None,
-    readings: list[HRVDayReading],
-) -> HRVStatus:
-    if headline is None or not isinstance(headline, dict):
+def _hrv_night_has_data(night: HRVNight) -> bool:
+    return any(v is not None for v in (night.last_night_avg_ms, night.weekly_avg_ms, night.status))
+
+
+def _iso_days(start: Date, end: Date) -> list[str]:
+    return [(start + timedelta(days=i)).isoformat() for i in range((end - start).days + 1)]
+
+
+def _contiguous_spans(days: list[str]) -> list[tuple[Date, Date]]:
+    """Group sorted ISO dates into runs of consecutive days."""
+    spans: list[tuple[Date, Date]] = []
+    for d in (Date.fromisoformat(x) for x in days):
+        if spans and d == spans[-1][1] + timedelta(days=1):
+            spans[-1] = (spans[-1][0], d)
+        else:
+            spans.append((d, d))
+    return spans
+
+
+def _hrv_night_is_final(night: HRVNight, today: Date) -> bool:
+    """Whether a night can be cached for good.
+
+    Garmin rewrites a night's summary through the following day (createTimeStamp is often late in
+    the evening), so nights are final from two days back. Missing nights can still arrive when a
+    watch syncs late, so an empty night is only final after two weeks.
+    """
+    age = (today - Date.fromisoformat(night.date)).days
+    return age >= (2 if _hrv_night_has_data(night) else 14)
+
+
+async def _hrv_nights(start: Date, end: Date) -> list[HRVNight]:
+    """Every night from start to end (oldest first), from the disk cache or Garmin."""
+    days = _iso_days(start, end)
+    known = {d: HRVNight.model_validate(v) for d, v in (await _hrv_store.get_many(days)).items()}
+    fetched: dict[str, HRVNight] = {}
+    missing = [d for d in days if d not in known]
+    if missing:
+        client = _get_garmin()
+        for span_start, span_end in _contiguous_spans(missing):
+            for w_start, w_end in _date_windows(span_start, span_end, RANGE_WINDOW_DAYS):
+                try:
+                    raw = await client.call("get_hrv_data_range", w_start, w_end)
+                    summaries = raw.get("hrvSummaries") if isinstance(raw, dict) else None
+                    for summary in summaries or []:
+                        night = _parse_hrv_night(summary, w_start)
+                        if w_start <= night.date <= w_end:
+                            fetched[night.date] = night
+                    for d in _iso_days(Date.fromisoformat(w_start), Date.fromisoformat(w_end)):
+                        fetched.setdefault(d, HRVNight(date=d))
+                except GarminClientError as exc:
+                    log.warning("hrv.range.failed", start=w_start, end=w_end, error=str(exc)[:200])
+                    for d in _iso_days(Date.fromisoformat(w_start), Date.fromisoformat(w_end)):
+                        try:
+                            day_raw = await client.call("get_hrv_data", d)
+                        except GarminClientError as day_exc:
+                            log.warning("hrv.day.failed", date=d, error=str(day_exc)[:200])
+                            continue  # unknown, not empty: don't cache it
+                        summary = day_raw.get("hrvSummary") if isinstance(day_raw, dict) else None
+                        fetched[d] = _parse_hrv_night(summary, d).model_copy(update={"date": d})
+        today = Date.today()
+        final = {d: n.model_dump() for d, n in fetched.items() if _hrv_night_is_final(n, today)}
+        if final:
+            await _hrv_store.put_many(final)
+    return [known.get(d) or fetched.get(d) or HRVNight(date=d) for d in days]
+
+
+def _build_hrv_status(nights: list[HRVNight]) -> HRVStatus:
+    readings = [
+        HRVDayReading(
+            date=n.date,
+            last_night_avg_ms=n.last_night_avg_ms,
+            last_night_5min_high_ms=n.last_night_5min_high_ms,
+            status=n.status,
+        )
+        for n in nights
+    ]
+    headline = next((n for n in reversed(nights) if _hrv_night_has_data(n)), None)
+    if headline is None:
         return HRVStatus(last_7_days=readings)
-    summary = headline.get("hrvSummary") or {}
-    if not isinstance(summary, dict):
-        return HRVStatus(last_7_days=readings)
-    baseline = summary.get("baseline") or {}
     return HRVStatus(
-        status=_opt_str(summary.get("status")),
-        last_night_avg_ms=_opt_float(summary.get("lastNightAvg")),
-        weekly_avg_ms=_opt_float(summary.get("weeklyAvg")),
-        baseline_low_ms=_opt_float(baseline.get("lowUpper"))
-        if isinstance(baseline, dict)
-        else None,
-        baseline_high_ms=_opt_float(baseline.get("balancedUpper"))
-        if isinstance(baseline, dict)
-        else None,
-        feedback=_opt_str(summary.get("feedbackPhrase")),
+        status=headline.status,
+        date=headline.date,
+        last_night_avg_ms=headline.last_night_avg_ms,
+        weekly_avg_ms=headline.weekly_avg_ms,
+        baseline_low_ms=headline.baseline_low_ms,
+        baseline_high_ms=headline.baseline_high_ms,
+        low_threshold_ms=headline.low_threshold_ms,
+        feedback=headline.feedback,
         last_7_days=readings,
     )
 
@@ -2268,7 +2405,9 @@ def _parse_endurance_score(date: str, raw: Any) -> EnduranceScore:
         gauge_lower_limit=_opt_int(payload.get("gaugeLowerLimit")),
         gauge_upper_limit=_opt_int(payload.get("gaugeUpperLimit")),
         contributors=contributors,
-        note=None if payload.get("overallScore") is not None else "No endurance score for this date.",
+        note=None
+        if payload.get("overallScore") is not None
+        else "No endurance score for this date.",
     )
 
 
@@ -2285,7 +2424,9 @@ def _parse_hill_score(date: str, raw: Any) -> HillScore:
         classification_id=_opt_int(payload.get("hillScoreClassificationId")),
         feedback_phrase_id=_opt_int(payload.get("hillScoreFeedbackPhraseId")),
         vo2_max=_opt_float(payload.get("vo2MaxPreciseValue") or payload.get("vo2Max")),
-        note=None if overall is not None else "No hill score yet — needs qualifying climbing efforts.",
+        note=None
+        if overall is not None
+        else "No hill score yet — needs qualifying climbing efforts.",
     )
 
 

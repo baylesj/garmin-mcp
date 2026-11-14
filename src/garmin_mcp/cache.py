@@ -7,7 +7,12 @@ import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
+
+import structlog
+
+log = structlog.get_logger(__name__)
 
 
 class TTLCache:
@@ -72,3 +77,45 @@ class TTLCache:
         async with self._lock:
             now = time.monotonic()
             return sum(1 for expires, _ in self._data.values() if expires > now)
+
+
+class NightStore:
+    """Small JSON file of per-date records that never change (e.g. past nights' HRV).
+
+    Loaded lazily, written atomically. A missing, unreadable or unwritable file only costs
+    extra Garmin calls: every error is logged and the store behaves as empty.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._data: dict[str, Any] | None = None
+        self._lock = asyncio.Lock()
+
+    def _load(self) -> dict[str, Any]:
+        if self._data is None:
+            try:
+                loaded = json.loads(self._path.read_text())
+                self._data = loaded if isinstance(loaded, dict) else {}
+            except FileNotFoundError:
+                self._data = {}
+            except (OSError, ValueError) as exc:
+                log.warning("night_store.load.failed", path=str(self._path), error=str(exc)[:200])
+                self._data = {}
+        return self._data
+
+    async def get_many(self, keys: list[str]) -> dict[str, Any]:
+        async with self._lock:
+            data = self._load()
+            return {k: data[k] for k in keys if k in data}
+
+    async def put_many(self, items: dict[str, Any]) -> None:
+        async with self._lock:
+            data = self._load()
+            data.update(items)
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(data, sort_keys=True))
+                tmp.replace(self._path)
+            except OSError as exc:
+                log.warning("night_store.save.failed", path=str(self._path), error=str(exc)[:200])

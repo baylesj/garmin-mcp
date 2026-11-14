@@ -35,6 +35,10 @@ class SleepSummary(_StrictBase):
     avg_overnight_hrv_ms: float | None = Field(
         default=None, description="Average overnight HRV in milliseconds."
     )
+    overnight_hrv_status: str | None = Field(
+        default=None,
+        description="Garmin's HRV status for the night, e.g. BALANCED, UNBALANCED, LOW.",
+    )
     avg_respiration: float | None = None
     avg_spo2: float | None = None
     note: str | None = Field(
@@ -139,12 +143,56 @@ class HRVStatus(_StrictBase):
     status: str | None = Field(
         default=None, description="Overall HRV status, such as BALANCED or LOW."
     )
+    date: str | None = Field(
+        default=None,
+        description="Night the summary fields describe (the newest night with HRV data).",
+    )
     last_night_avg_ms: float | None = None
-    weekly_avg_ms: float | None = None
-    baseline_low_ms: float | None = None
-    baseline_high_ms: float | None = None
+    weekly_avg_ms: float | None = Field(default=None, description="7-night average HRV, ms.")
+    baseline_low_ms: float | None = Field(
+        default=None, description="Bottom of the balanced baseline range, ms (Garmin balancedLow)."
+    )
+    baseline_high_ms: float | None = Field(
+        default=None, description="Top of the balanced baseline range, ms (Garmin balancedUpper)."
+    )
+    low_threshold_ms: float | None = Field(
+        default=None,
+        description="Weekly average at or below this is LOW, ms (Garmin lowUpper).",
+    )
     feedback: str | None = None
     last_7_days: list[HRVDayReading] = Field(default_factory=list)
+
+
+class HRVNight(_StrictBase):
+    """One night of Garmin's HRV summary."""
+
+    date: str = Field(description="Calendar date of the morning the night ends, YYYY-MM-DD.")
+    last_night_avg_ms: float | None = None
+    last_night_5min_high_ms: float | None = None
+    weekly_avg_ms: float | None = Field(default=None, description="7-night average HRV, ms.")
+    status: str | None = Field(
+        default=None, description="BALANCED, UNBALANCED, LOW, POOR, or null when not measured."
+    )
+    baseline_low_ms: float | None = Field(
+        default=None, description="Bottom of the balanced baseline range, ms (Garmin balancedLow)."
+    )
+    baseline_high_ms: float | None = Field(
+        default=None, description="Top of the balanced baseline range, ms (Garmin balancedUpper)."
+    )
+    low_threshold_ms: float | None = Field(
+        default=None,
+        description="Weekly average at or below this is LOW, ms (Garmin lowUpper).",
+    )
+    feedback: str | None = Field(default=None, description="Garmin feedback phrase id.")
+
+
+class HRVHistory(_StrictBase):
+    start_date: str
+    end_date: str
+    nights: list[HRVNight] = Field(
+        default_factory=list, description="One row per night, oldest first; nulls where no data."
+    )
+    nights_with_data: int = 0
 
 
 class BodyBatteryReading(_StrictBase):

@@ -8,6 +8,7 @@ field becomes `None` rather than the test failing in surprising ways.
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -263,15 +264,11 @@ async def test_weekly_summary_rejects_bad_metric() -> None:
 
 @pytest.mark.asyncio
 async def test_rhr_parses_real_garmin_shape() -> None:
-    """Garmin nests RHR as allMetrics.metricsMap.WELLNESS_RESTING_HEART_RATE[].value."""
-    payload = {
-        "allMetrics": {
-            "metricsMap": {
-                "WELLNESS_RESTING_HEART_RATE": [{"value": 57.0, "calendarDate": "2026-05-09"}]
-            }
-        }
-    }
-    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_rhr_day": payload}))
+    """get_rhr_daily (garminconnect) flattens the range to [{calendarDate, value}]."""
+    today = dt.date.today().isoformat()
+    server_module.set_garmin_client_for_testing(
+        FakeGarminClient({"get_rhr_daily": [{"calendarDate": today, "value": 57.0}]})
+    )
     result = await server_module.get_resting_heart_rate(days=1)
     assert result.days[0].rhr_bpm == 57
     assert result.avg_rhr_bpm == 57.0
@@ -340,21 +337,30 @@ TRAINING_STATUS_RAW: dict[str, Any] = {
 
 
 def _rhr_ramp() -> Any:
-    """A get_rhr_day double returning 50, 51, 52, ... across the 7-day loop.
+    """A get_rhr_daily double returning 50, 51, 52, ... day by day across the range.
 
-    The briefing's RHR section is fetched oldest-day-first, so the final
-    (newest) reading is 56 against a prior-day baseline of 52.5 → +3.5 bpm.
+    The briefing asks for 7 days, so the newest reading is 56 against a
+    prior-day baseline of 52.5 → +3.5 bpm.
     """
-    counter = {"n": 0}
 
-    def _respond(_date: str) -> dict[str, Any]:
-        value = 50 + counter["n"]
-        counter["n"] += 1
-        return {
-            "allMetrics": {"metricsMap": {"WELLNESS_RESTING_HEART_RATE": [{"value": value}]}}
-        }
+    def _respond(start: str, end: str) -> list[dict[str, Any]]:
+        s, e = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+        return [
+            {"calendarDate": (s + dt.timedelta(days=i)).isoformat(), "value": 50.0 + i}
+            for i in range((e - s).days + 1)
+        ]
 
     return _respond
+
+
+def _hrv_range(start: str, end: str) -> dict[str, Any]:
+    s, e = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    summaries = []
+    for i in range((e - s).days + 1):
+        summaries.append(
+            {**HRV_RAW["hrvSummary"], "calendarDate": (s + dt.timedelta(days=i)).isoformat()}
+        )
+    return {"hrvSummaries": summaries}
 
 
 def _briefing_responses() -> dict[str, Any]:
@@ -365,11 +371,11 @@ def _briefing_responses() -> dict[str, Any]:
                 "sleepScores": {"overall": {"value": 80}},
             }
         },
-        "get_hrv_data": HRV_RAW,
+        "get_hrv_data_range": _hrv_range,
         "get_body_battery": BODY_BATTERY_RAW,
         "get_training_readiness": READINESS_PAYLOAD,
         "get_training_status": TRAINING_STATUS_RAW,
-        "get_rhr_day": _rhr_ramp(),
+        "get_rhr_daily": _rhr_ramp(),
     }
 
 

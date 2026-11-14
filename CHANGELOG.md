@@ -6,6 +6,9 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ### Added
 
+- **`get_hrv_history(start_date, end_date)`** — one row per night (date, last night's average and 5-minute high, 7-night average, status, balanced baseline range) for up to 366 nights. It uses Garmin's range endpoint (`get_hrv_data_range`) in windows of 90 nights, falling back to one call per night if a window fails. Past nights are cached on disk (`hrv_nights.json` in `$GARMIN_CACHE_DIR`, by default a `cache` folder beside the token directory): a night with data from two days back, an empty night after two weeks.
+- `get_hrv_status` takes an optional `date` (the last night of its 7-night window) and also returns `date` (the night its summary describes) and `low_threshold_ms`.
+- `get_sleep` also returns `overnight_hrv_status`.
 - **`get_ftp`** — functional threshold power for a sport (default `CYCLING`): the current FTP with the date it was set, its source (`biometricSourceType`), and Garmin's stale flag; FTP history over the last `days` days (default 365, up to 1095) at daily, weekly, monthly, or yearly aggregation, fetched in windows of at most 366 days because Garmin rejects longer ranges; and the sport's power zones with floor, ceiling, and percent of FTP. Each section degrades to `null` (and is named in `sections_unavailable`) instead of failing the call.
 
 ### Changed
@@ -15,6 +18,10 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ### Fixed
 
+- **`get_hrv_status` summary fields were all null** whenever the newest night had no summary yet (before it synced): the headline came from the first night that returned any payload. It now comes from the newest night with HRV data. `baseline_low_ms` is now the bottom of the balanced range (`balancedLow`) instead of the top of the low range (`lowUpper`), matching the range Garmin Connect shows; `lowUpper` is `low_threshold_ms`.
+- **`get_sleep` `avg_overnight_hrv_ms` was always null**: Garmin puts overnight HRV beside `dailySleepDTO` (`avgOvernightHrv`, `hrvStatus`), not in an `hrvSummary`.
+- **`get_resting_heart_rate` was capped at 28 days** and made one call per day. It now goes back up to 366 days through the wellness range endpoint (`get_rhr_daily`), 90 days per call, with the per-day call as a fallback.
+- Requires `garminconnect>=0.3.20` for `get_hrv_data_range` and `get_rhr_daily`, which join the read allowlist.
 - **Training readiness recovery time** — Garmin's `recoveryTime` is in minutes, but it was reported unchanged as `recovery_time_hours`, so 73.5 h of recovery read as 4410 hours. `recovery_time_hours` is now converted (a float, rounded to 0.1 h) and the raw value is kept as `recovery_time_minutes`.
 
 ## [0.5.0] — 2026-08-17
