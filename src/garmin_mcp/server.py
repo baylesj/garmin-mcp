@@ -238,7 +238,7 @@ _hrv_store = NightStore(Path(CACHE_DIR) / "hrv_nights.json")
 # was verified to return every night (2026-11-13).
 RANGE_WINDOW_DAYS = 90
 HRV_HISTORY_MAX_DAYS = 366
-RHR_MAX_DAYS = 366
+RHR_MAX_DAYS = 1100
 
 
 def _get_garmin() -> GarminClient:
@@ -527,7 +527,7 @@ async def get_resting_heart_rate(days: int = 7) -> RestingHeartRateTrend:
     """Resting heart rate trend over the last ``days`` days.
 
     Args:
-        days: How many recent days to include, ending today. Capped at 366.
+        days: How many recent days to include, ending today. Capped at 1100 (about three years).
     """
     days = max(1, min(RHR_MAX_DAYS, days))
     end = Date.today()
