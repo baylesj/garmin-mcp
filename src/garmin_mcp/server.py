@@ -343,18 +343,21 @@ async def get_sleep(date: str | None = None) -> SleepSummary:
 
 
 @mcp.tool()
-async def get_recent_activities(limit: int = 10) -> ActivityList:
+async def get_recent_activities(limit: int = 10, start: int = 0) -> ActivityList:
     """List recent activities with type, duration, distance, and average heart rate.
 
     Args:
         limit: How many of the most recent activities to return. Capped at 50.
+        start: How many of the most recent activities to skip first, to page further back
+            (start=50 with limit=50 gives activities 51-100). Defaults to 0.
     """
     limit = max(1, min(50, limit))
-    cache_key = TTLCache.make_key("get_recent_activities", {"limit": limit})
+    start = max(0, min(5000, start))
+    cache_key = TTLCache.make_key("get_recent_activities", {"limit": limit, "start": start})
 
     async def fetch() -> ActivityList:
         client = _get_garmin()
-        raw = await client.call("get_activities", 0, limit)
+        raw = await client.call("get_activities", start, limit)
         return _parse_activity_list(raw)
 
     result: ActivityList = await _cache.get_or_compute(cache_key, 300, fetch)

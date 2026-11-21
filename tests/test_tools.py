@@ -143,3 +143,11 @@ async def test_invalid_date_raises() -> None:
 
     with pytest.raises(ValueError, match="Invalid date"):
         await server_module.get_sleep(date="not-a-date")
+
+
+@pytest.mark.asyncio
+async def test_get_recent_activities_pages_with_start() -> None:
+    fake = FakeGarminClient({"get_activities": []})
+    server_module.set_garmin_client_for_testing(fake)
+    await server_module.get_recent_activities(limit=50, start=100)
+    assert fake.call_log[-1] == ("get_activities", (100, 50), {})
