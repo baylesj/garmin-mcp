@@ -6,6 +6,7 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ### Added
 
+- **`get_activity_streams(activity_id, max_points)`** — an activity's samples as parallel columns (elapsed and moving time, GPS, elevation, distance, speed, heart rate, power, cadence, right-leg balance, stamina, respiration, performance condition) from Garmin's activity details endpoint, downsampled by Garmin to `max_points` (default 600, 10 to 20000), plus the summary's normalised power, TSS and IF. Read-only: `get_activity_details` joins the read allowlist.
 - `get_resting_heart_rate` goes back up to 1100 days (was 366), still 90 days per request.
 - `get_recent_activities` takes an optional `start` (activities to skip), so callers can page back past the 50 most recent.
 - **`get_hrv_history(start_date, end_date)`** — one row per night (date, last night's average and 5-minute high, 7-night average, status, balanced baseline range) for up to 366 nights. It uses Garmin's range endpoint (`get_hrv_data_range`) in windows of 90 nights, falling back to one call per night if a window fails. Past nights are cached on disk (`hrv_nights.json` in `$GARMIN_CACHE_DIR`, by default a `cache` folder beside the token directory): a night with data from two days back, an empty night after two weeks.

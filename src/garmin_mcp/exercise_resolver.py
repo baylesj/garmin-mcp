@@ -171,9 +171,7 @@ def _name_to_category() -> dict[str, str]:
     out: dict[str, str] = {}
     for category, name, _toks in _index():
         current = out.get(name)
-        if current is None or (
-            current in _JUNK_CATEGORIES and category not in _JUNK_CATEGORIES
-        ):
+        if current is None or (current in _JUNK_CATEGORIES and category not in _JUNK_CATEGORIES):
             out[name] = category
     return out
 

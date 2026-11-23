@@ -58,6 +58,7 @@ from garmin_mcp.models import (
     ActivityDetail,
     ActivityList,
     ActivitySplit,
+    ActivityStreams,
     ActivityWeather,
     BodyBatteryReading,
     BodyBatterySummary,
@@ -392,6 +393,93 @@ async def get_activity_details(activity_id: str) -> ActivityDetail:
 
     result: ActivityDetail = await _cache.get_or_compute(cache_key, 86400, fetch)
     return result
+
+
+# Garmin's metric keys for get_activity_streams' columns.
+_STREAM_KEYS: dict[str, str] = {
+    "elapsed_s": "sumElapsedDuration",
+    "moving_s": "sumMovingDuration",
+    "latitude": "directLatitude",
+    "longitude": "directLongitude",
+    "elevation_m": "directElevation",
+    "distance_m": "sumDistance",
+    "speed_mps": "directSpeed",
+    "heart_rate": "directHeartRate",
+    "power_w": "directPower",
+    "cadence_rpm": "directBikeCadence",
+    "right_balance_pct": "directRightBalance",
+    "stamina_available_pct": "directAvailableStamina",
+    "stamina_potential_pct": "directPotentialStamina",
+    "respiration_brpm": "directRespirationRate",
+    "performance_condition": "directPerformanceCondition",
+}
+
+
+@mcp.tool()
+async def get_activity_streams(activity_id: str, max_points: int = 600) -> ActivityStreams:
+    """An activity's recorded samples over time: GPS, elevation, distance, speed, heart rate,
+    power, cadence, left/right balance, stamina, respiration and performance condition, as
+    parallel columns, plus the summary's power figures (normalised power, TSS, IF).
+
+    Use it for analysing a ride or run in depth (climbs, pacing, heart-rate drift, power curve).
+    Columns a device didn't record are empty. The output is large: keep max_points low unless
+    every sample is needed.
+
+    Args:
+        activity_id: The activity's numeric Garmin ID, as returned by ``get_recent_activities``.
+        max_points: Samples to return, evenly spread over the activity (Garmin's own
+            downsampling). 10 to 20000; about one per second needs duration in seconds.
+    """
+    if not activity_id or not str(activity_id).strip():
+        raise ValueError("activity_id is required.")
+    max_points = max(10, min(20000, int(max_points)))
+    cache_key = TTLCache.make_key("get_activity_streams", {"id": activity_id, "n": max_points})
+
+    async def fetch() -> ActivityStreams:
+        client = _get_garmin()
+        summary = await client.call("get_activity", activity_id)
+        raw = await client.call("get_activity_details", activity_id, max_points, max_points)
+        return _parse_activity_streams(str(activity_id), summary, raw)
+
+    result: ActivityStreams = await _cache.get_or_compute(cache_key, 86400, fetch)
+    return result
+
+
+def _parse_activity_streams(activity_id: str, summary: Any, raw: Any) -> ActivityStreams:
+    sm = (summary.get("summaryDTO") or {}) if isinstance(summary, dict) else {}
+    type_dto = (summary.get("activityTypeDTO") or {}) if isinstance(summary, dict) else {}
+    out = ActivityStreams(
+        activity_id=activity_id,
+        name=_opt_str(summary.get("activityName")) if isinstance(summary, dict) else None,
+        activity_type=_opt_str(type_dto.get("typeKey")) if isinstance(type_dto, dict) else None,
+        start_time=_opt_str(sm.get("startTimeLocal")),
+        duration_seconds=_opt_float(sm.get("duration")),
+        moving_seconds=_opt_float(sm.get("movingDuration")),
+        distance_meters=_opt_float(sm.get("distance")),
+        elevation_gain_meters=_opt_float(sm.get("elevationGain")),
+        avg_power=_opt_float(sm.get("averagePower")),
+        normalised_power=_opt_float(sm.get("normalizedPower")),
+        max_power=_opt_float(sm.get("maxPower")),
+        training_stress_score=_opt_float(sm.get("trainingStressScore")),
+        intensity_factor=_opt_float(sm.get("intensityFactor")),
+        avg_heart_rate=_opt_float(sm.get("averageHR")),
+    )
+    if not isinstance(raw, dict) or not raw.get("activityDetailMetrics"):
+        out.note = "Garmin has no recorded samples for this activity."
+        return out
+    index = {
+        m.get("key"): m.get("metricsIndex")
+        for m in raw.get("metricDescriptors") or []
+        if isinstance(m, dict)
+    }
+    rows = [r.get("metrics") or [] for r in raw["activityDetailMetrics"] if isinstance(r, dict)]
+    out.points = len(rows)
+    for field, key in _STREAM_KEYS.items():
+        i = index.get(key)
+        if i is None:
+            continue
+        setattr(out, field, [_opt_float(r[i]) if i < len(r) else None for r in rows])
+    return out
 
 
 @mcp.tool()

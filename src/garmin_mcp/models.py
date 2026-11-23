@@ -101,6 +101,46 @@ class ActivityDetail(_StrictBase):
     hr_zones: list[HRZone] = Field(default_factory=list)
 
 
+class ActivityStreams(_StrictBase):
+    """One activity's recorded samples as parallel columns (index i of each list is one sample)."""
+
+    activity_id: str
+    name: str | None = None
+    activity_type: str | None = None
+    start_time: str | None = Field(default=None, description="Local start time as ISO-8601.")
+    duration_seconds: float | None = None
+    moving_seconds: float | None = None
+    distance_meters: float | None = None
+    elevation_gain_meters: float | None = None
+    avg_power: float | None = None
+    normalised_power: float | None = None
+    max_power: float | None = None
+    training_stress_score: float | None = None
+    intensity_factor: float | None = None
+    avg_heart_rate: float | None = None
+    points: int = Field(default=0, description="Number of samples in each column.")
+    elapsed_s: list[float | None] = Field(
+        default_factory=list, description="Seconds since the start, pauses included."
+    )
+    moving_s: list[float | None] = Field(default_factory=list, description="Moving seconds so far.")
+    latitude: list[float | None] = Field(default_factory=list)
+    longitude: list[float | None] = Field(default_factory=list)
+    elevation_m: list[float | None] = Field(default_factory=list)
+    distance_m: list[float | None] = Field(default_factory=list, description="Distance so far.")
+    speed_mps: list[float | None] = Field(default_factory=list)
+    heart_rate: list[float | None] = Field(default_factory=list)
+    power_w: list[float | None] = Field(default_factory=list)
+    cadence_rpm: list[float | None] = Field(default_factory=list)
+    right_balance_pct: list[float | None] = Field(
+        default_factory=list, description="Right leg's share of power (power-meter pedals)."
+    )
+    stamina_available_pct: list[float | None] = Field(default_factory=list)
+    stamina_potential_pct: list[float | None] = Field(default_factory=list)
+    respiration_brpm: list[float | None] = Field(default_factory=list)
+    performance_condition: list[float | None] = Field(default_factory=list)
+    note: str | None = None
+
+
 class TrainingLoadDay(_StrictBase):
     date: str
     daily_training_load: float | None = Field(

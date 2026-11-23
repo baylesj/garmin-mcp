@@ -86,9 +86,7 @@ async def test_training_load_prefers_primary_device() -> None:
             }
         }
     }
-    server_module.set_garmin_client_for_testing(
-        FakeGarminClient({"get_training_status": payload})
-    )
+    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_training_status": payload}))
     result = await server_module.get_training_load(days=1)
     assert result.current_atl == 250.0
     assert result.current_status == "RIGHT_1"
@@ -114,9 +112,7 @@ _USER_SUMMARY: dict[str, Any] = {
 @pytest.mark.asyncio
 async def test_stress_minutes_from_user_summary() -> None:
     server_module.set_garmin_client_for_testing(
-        FakeGarminClient(
-            {"get_stress_data": _STRESS_DATA, "get_user_summary": _USER_SUMMARY}
-        )
+        FakeGarminClient({"get_stress_data": _STRESS_DATA, "get_user_summary": _USER_SUMMARY})
     )
     result = await server_module.get_stress(date="2026-06-11")
     assert isinstance(result, StressSummary)
@@ -272,9 +268,7 @@ async def test_endurance_score_parses() -> None:
             {"activityTypeId": None, "group": 8, "contribution": 15.43},
         ],
     }
-    server_module.set_garmin_client_for_testing(
-        FakeGarminClient({"get_endurance_score": payload})
-    )
+    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_endurance_score": payload}))
     result = await server_module.get_endurance_score(date="2026-06-11")
     assert isinstance(result, EnduranceScore)
     assert result.overall_score == 3460
@@ -285,9 +279,7 @@ async def test_endurance_score_parses() -> None:
 
 @pytest.mark.asyncio
 async def test_endurance_score_missing() -> None:
-    server_module.set_garmin_client_for_testing(
-        FakeGarminClient({"get_endurance_score": None})
-    )
+    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_endurance_score": None}))
     result = await server_module.get_endurance_score(date="2026-06-11")
     assert result.overall_score is None
     assert result.note is not None
@@ -334,9 +326,7 @@ async def test_activity_weather_parses() -> None:
         "weatherStationDTO": {"id": "KMEM", "name": "Memphis Intl Airport"},
         "weatherTypeDTO": {"desc": "Fair"},
     }
-    server_module.set_garmin_client_for_testing(
-        FakeGarminClient({"get_activity_weather": payload})
-    )
+    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_activity_weather": payload}))
     result = await server_module.get_activity_weather("23206938390")
     assert isinstance(result, ActivityWeather)
     assert result.description == "Fair"
@@ -347,8 +337,6 @@ async def test_activity_weather_parses() -> None:
 
 @pytest.mark.asyncio
 async def test_activity_weather_missing() -> None:
-    server_module.set_garmin_client_for_testing(
-        FakeGarminClient({"get_activity_weather": None})
-    )
+    server_module.set_garmin_client_for_testing(FakeGarminClient({"get_activity_weather": None}))
     result = await server_module.get_activity_weather("1")
     assert result.note is not None
