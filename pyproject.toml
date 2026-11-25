@@ -28,6 +28,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "anyio>=4.0",
     "platformdirs>=4.0",
+    "fitdecode>=0.10",
 ]
 
 [project.urls]
@@ -40,6 +41,7 @@ garmin-mcp = "garmin_mcp.cli:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "fit-tool>=0.9",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",

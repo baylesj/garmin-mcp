@@ -55,6 +55,7 @@ _READ_METHODS: frozenset[str] = frozenset(
         "get_activity",
         "get_activity_splits",
         "get_activity_details",
+        "download_activity",
         "get_activity_hr_in_timezones",
         "get_training_status",
         "get_hrv_data",

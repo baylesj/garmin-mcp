@@ -6,6 +6,7 @@ All notable changes to garmin-mcp are documented here. The project uses semantic
 
 ### Added
 
+- **`get_pedal_dynamics(activity_id)`** — pedal metrics from a ride's original FIT file, which Garmin's JSON leaves out: left/right balance (power-weighted, the session's own figure, and by power band), torque effectiveness and pedal smoothness per leg, cadence while pedalling, platform centre offset and power phase when recorded, and the paired sensors (power meter, chest strap or wrist heart rate, battery, firmware). Read-only: `download_activity` joins the read allowlist. New dependency: `fitdecode`; `fit-tool` for tests.
 - **`get_activity_streams(activity_id, max_points)`** — an activity's samples as parallel columns (elapsed and moving time, GPS, elevation, distance, speed, heart rate, power, cadence, right-leg balance, stamina, respiration, performance condition) from Garmin's activity details endpoint, downsampled by Garmin to `max_points` (default 600, 10 to 20000), plus the summary's normalised power, TSS and IF. Read-only: `get_activity_details` joins the read allowlist.
 - `get_resting_heart_rate` goes back up to 1100 days (was 366), still 90 days per request.
 - `get_recent_activities` takes an optional `start` (activities to skip), so callers can page back past the 50 most recent.

@@ -116,6 +116,7 @@ from garmin_mcp.models import (
     _opt_str,
 )
 from garmin_mcp.paths import default_token_dir
+from garmin_mcp.pedal_dynamics import register_pedal_dynamics
 from garmin_mcp.running_builder import (
     build_running_workout,
     estimate_duration_seconds,
@@ -480,6 +481,10 @@ def _parse_activity_streams(activity_id: str, summary: Any, raw: Any) -> Activit
             continue
         setattr(out, field, [_opt_float(r[i]) if i < len(r) else None for r in rows])
     return out
+
+
+# get_pedal_dynamics: balance, torque effectiveness and pedal smoothness from the original FIT file.
+register_pedal_dynamics(mcp, _get_garmin)
 
 
 @mcp.tool()
